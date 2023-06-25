@@ -1,12 +1,25 @@
 import { Request, Response } from 'express';
+import cloudinary from 'cloudinary';
+import multer, { Multer } from 'multer';
 import prisma from '../prisma';
 import { User } from '@prisma/client';
+import fs from 'fs';
 
 interface UserRequest extends Request {
   user?: {
     id: string;
   };
 }
+
+//cloudinary Configuration
+cloudinary.v2.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+// Set up file upload using multer
+const upload: Multer = multer({ dest: 'uploads/' });
 
 async function getMe(req: UserRequest, res: Response) {
   const id = req.user?.id;
@@ -60,32 +73,50 @@ async function getUserById(req: Request, res: Response) {
 }
 
 async function updateUserProfile(req: Request, res: Response) {
-  const body = req.body;
-  const { userId } = req.params;
   try {
-    const updatedUser = await prisma.user.update({
-      where: {
-        id: userId,
-      },
-      data: {
-        name: body.name,
-        username: body.username,
-        bio: body.bio,
-        profileImage: body.profileImage,
-        coverImage: body.coverImage,
-      },
-    });
+    const { userId } = req.params;
+    const { name, username, bio } = req.body;
 
-    if (updatedUser) {
-      return res
+    upload.array('images')(req, res, async (err) => {
+      if (err) {
+        return res.status(400).send(err);
+      }
+
+      const files: Express.Multer.File[] = req.files as Express.Multer.File[];
+
+      const uploadedImages = await Promise.all(
+        files.map(async (file) => {
+          const result = await cloudinary.v2.uploader.upload(file.path);
+          return result.secure_url;
+        }),
+      );
+
+      const updatedUser = await prisma.user.update({
+        where: {
+          id: userId,
+        },
+        data: {
+          name,
+          username,
+          bio,
+          profileImage: uploadedImages[0],
+          coverImage: uploadedImages[1],
+        },
+      });
+
+      res
         .status(200)
         .json({ success: true, message: 'Updated user successfully' });
-    }
-
-    return res.status(404).json({ error: 'Fail to update user' });
+    });
   } catch (error) {
-    console.log(error);
+    console.error(error);
     return res.status(500).json({ error: 'Internal server error' });
+  } finally {
+    // Delete the uploaded files from the server
+    const files: Express.Multer.File[] = req.files as Express.Multer.File[];
+    for (const file of files) {
+      fs.unlinkSync(file.path);
+    }
   }
 }
 

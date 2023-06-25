@@ -4,7 +4,18 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.unfollowUserHandler = exports.followUserHandler = exports.getAllUsers = exports.updateUserProfile = exports.getUserById = exports.getMe = void 0;
+const cloudinary_1 = __importDefault(require("cloudinary"));
+const multer_1 = __importDefault(require("multer"));
 const prisma_1 = __importDefault(require("../prisma"));
+const fs_1 = __importDefault(require("fs"));
+//cloudinary Configuration
+cloudinary_1.default.v2.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+// Set up file upload using multer
+const upload = (0, multer_1.default)({ dest: 'uploads/' });
 async function getMe(req, res) {
     const id = req.user?.id;
     try {
@@ -52,31 +63,45 @@ async function getUserById(req, res) {
 }
 exports.getUserById = getUserById;
 async function updateUserProfile(req, res) {
-    const body = req.body;
-    const { userId } = req.params;
     try {
-        const updatedUser = await prisma_1.default.user.update({
-            where: {
-                id: userId,
-            },
-            data: {
-                name: body.name,
-                username: body.username,
-                bio: body.bio,
-                profileImage: body.profileImage,
-                coverImage: body.coverImage,
-            },
-        });
-        if (updatedUser) {
-            return res
+        const { userId } = req.params;
+        const { name, username, bio } = req.body;
+        upload.array('images')(req, res, async (err) => {
+            if (err) {
+                return res.status(400).send(err);
+            }
+            const files = req.files;
+            const uploadedImages = await Promise.all(files.map(async (file) => {
+                const result = await cloudinary_1.default.v2.uploader.upload(file.path);
+                return result.secure_url;
+            }));
+            const updatedUser = await prisma_1.default.user.update({
+                where: {
+                    id: userId,
+                },
+                data: {
+                    name,
+                    username,
+                    bio,
+                    profileImage: uploadedImages[0],
+                    coverImage: uploadedImages[1],
+                },
+            });
+            res
                 .status(200)
                 .json({ success: true, message: 'Updated user successfully' });
-        }
-        return res.status(404).json({ error: 'Fail to update user' });
+        });
     }
     catch (error) {
-        console.log(error);
+        console.error(error);
         return res.status(500).json({ error: 'Internal server error' });
+    }
+    finally {
+        // Delete the uploaded files from the server
+        const files = req.files;
+        for (const file of files) {
+            fs_1.default.unlinkSync(file.path);
+        }
     }
 }
 exports.updateUserProfile = updateUserProfile;
